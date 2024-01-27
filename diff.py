@@ -10,6 +10,56 @@ https://blog.robertelder.org/diff-algorithm/
 
 DL = -1
 IN = 1
+EQ = 0
+
+
+class Hunk:
+
+    def __init__(self):
+        self.diffs: list = []
+        self.start1 = None
+        self.start2 = None
+        self.length1 = 0
+        self.length2 = 0
+
+    def __str__(self):
+        """
+        Similar to GNU diff's output.
+        """
+        if self.length1 == 0:
+            coords1 = str(self.start1) + ",0"
+        elif self.length1 == 1:
+            coords1 = str(self.start1 + 1)
+        else:
+            coords1 = str(self.start1 + 1) + "," + str(self.length1)
+        if self.length2 == 0:
+            coords2 = str(self.start2) + ",0"
+        elif self.length2 == 1:
+            coords2 = str(self.start2 + 1)
+        else:
+            coords2 = str(self.start2 + 1) + "," + str(self.length2)
+        text = ["@@ -", coords1, " +", coords2, " @@\n"]
+
+        # Escape the body of the patch with %xx notation.
+        for (op, data) in self.diffs:
+            o = ' '
+            if op == IN:
+                o = '+'
+            elif op == DL:
+                o = '-'
+
+            if isinstance(data, list):
+                form = ""
+                for l in data:
+                    form += o + l + "\n"
+            else:
+                form = o + data
+
+            # High ascii will raise UnicodeDecodeError.  Use Unicode instead.
+            # data = data.encode("utf-8")
+            # text.append(urllib.parse.quote(data, "!~*'();/?:@&=+$,# ") + "\n")
+            text.append(form)
+        return "".join(text)
 
 
 def find_middle_snake(old_sequence, new_sequence):
@@ -86,7 +136,7 @@ def find_middle_snake(old_sequence, new_sequence):
                     return 2 * nde, old_len - x, new_len - y, old_len - x_i, new_len - y_i
 
 
-def shortest_edit_script(old_sequence, new_sequence):
+def shortest_edit_script(old_sequence, new_sequence, ctx_len=3):
     old_len = len(old_sequence)
     new_len = len(new_sequence)
     trace = []
@@ -122,16 +172,39 @@ def shortest_edit_script(old_sequence, new_sequence):
                 # (new_len == old_len) This reduces to a snake which does not contain any edits.
                 pass
 
-        elif old_len > 0:
-            # Only Horizontal - Deletions.
-            op = (DL, current_x, old_sequence[current_x:current_x + old_len])
+        elif old_len > 0 or new_len > 0:
+            # Compute context indexes.
+            hunk: Hunk = Hunk()
+            hunk.start1 = max(0, current_x - ctx_len)
+            hunk.start2 = max(0, current_y - ctx_len)
 
-            trace.append(op)
-        elif new_len > 0:
-            # Only Vertical - Insertions.
-            op = (IN, current_x, new_sequence[current_y:current_y + new_len])
+            mergable = len(trace) and hunk.start1 <= (trace[-1].start1 + trace[-1].length1)
+            if mergable:
+                hunk = trace.pop()
+                ectx = hunk.diffs.pop()  # Remove trailing ctx
+                last_pos = hunk.start1 + hunk.length1 - len(ectx) - 1
+                eq_len = current_x - last_pos
+                if eq_len > 0:
+                    hunk.diffs.append((EQ, old_sequence[last_pos:last_pos + eq_len]))
 
-            trace.append(op)
+            elif current_x - hunk.start1 > 0:
+                hunk.diffs.append((EQ, old_sequence[hunk.start1:current_x]))
+
+            if old_len > 0:
+                # Only Horizontal - Deletions.
+                hunk.diffs.append((DL, old_sequence[current_x:current_x + old_len]))
+            elif new_len > 0:
+                # Only Vertical - Insertions.
+                hunk.diffs.append((IN, new_sequence[current_y:current_y + new_len]))
+
+            hunk.length1 = min(len(old_sequence), current_x + old_len + ctx_len) - hunk.start1
+            hunk.length2 = min(len(new_sequence), current_y + new_len + ctx_len) - hunk.start2
+            end_ctx_len = hunk.length1 - old_len - (current_x - hunk.start1)
+            if end_ctx_len > 0:
+                hunk.diffs.append(
+                    (EQ, old_sequence[current_x + old_len:current_x + old_len + end_ctx_len]))
+
+            trace.append(hunk)
 
     return trace
 
@@ -143,7 +216,7 @@ if __name__ == '__main__':
     f1 = open(sys.argv[1]).read().splitlines()
     f2 = open(sys.argv[2]).read().splitlines()
 
-    diffs = shortest_edit_script(f1, f2)
+    diffs = shortest_edit_script(f1, f2, 3)
 
     for diff in diffs:
-        print(diff[0], diff[1] + 1, diff[2])
+        print(diff, end='')
