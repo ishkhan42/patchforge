@@ -182,7 +182,7 @@ def shortest_edit_script(old_sequence, new_sequence, ctx_len=3):
             if mergable:
                 hunk = trace.pop()
                 ectx = hunk.diffs.pop()  # Remove trailing ctx
-                last_pos = hunk.start1 + hunk.length1 - len(ectx) - 1
+                last_pos = hunk.start1 + hunk.length1 - len(ectx[1])
                 eq_len = current_x - last_pos
                 if eq_len > 0:
                     hunk.diffs.append((EQ, old_sequence[last_pos:last_pos + eq_len]))
