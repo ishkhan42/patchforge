@@ -1,10 +1,14 @@
-import sys
+import argparse
 from diff import shortest_edit_script, DL, IN, EQ, Hunk
 
 ############ CONSTANTS ############
 
 hunk_file = 'hunks.diff'
-patched_file = 'result.c'
+output_file = 'result.c'
+
+
+offset_window = 20  # How many lines to look around when applying a hunk
+edits_script_ctx = 3  # How many lines to look around when finding shortest edit script
 
 ############           ############
 
@@ -59,7 +63,7 @@ def construct_splited_sequence(diffs: list, patched: bool):
     return prefix, middle, postfix
 
 
-def apply_hunk(old_sequence: list, hunk: Hunk, delta: int, offset_window=20):
+def apply_hunk(old_sequence: list, hunk: Hunk, delta: int):
     '''
     Apply a hunk to a sequence.
     If conflict is found, log and return old sequence, None.
@@ -132,7 +136,7 @@ def apply_hunk(old_sequence: list, hunk: Hunk, delta: int, offset_window=20):
 
 def apply_patch(base_sequence: list, patched_sequence, target_sequence):
 
-    hunks = shortest_edit_script(base_sequence, patched_sequence)
+    hunks = shortest_edit_script(base_sequence, patched_sequence, ctx_len=edits_script_ctx)
 
     # Log hunks to file
     with open(hunk_file, 'w') as f:
@@ -145,21 +149,39 @@ def apply_patch(base_sequence: list, patched_sequence, target_sequence):
     for i, hunk in enumerate(hunks):
         target_sequence, offset = apply_hunk(target_sequence, hunk, delta)
         if offset is None:
-            print(f'Hunk #{i+1} Failed', file=sys.stderr)
+            print(f'Hunk #{i+1} Failed')
             delta += hunk.length1 - hunk.length2
         elif offset != 0:
             delta += offset
-            print(f'Hunk #{i+1} Succeeded with offset {delta}', file=sys.stderr)
+            print(f'Hunk #{i+1} Succeeded with offset {delta}')
 
     return target_sequence
 
 
-f1 = open(sys.argv[1]).read().splitlines()
-f2 = open(sys.argv[2]).read().splitlines()
-f3 = open(sys.argv[3]).read().splitlines()
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('base_file', type=str, help='Base file')
+    parser.add_argument('patched_file', type=str, help='Patched file')
+    parser.add_argument('target_file', type=str, help='Target file')
+    parser.add_argument('--log_file', type=str, default=hunk_file, help='Hunk log file')
+    parser.add_argument('--output', type=str, default=output_file, help='Patched file name')
+    parser.add_argument('--window', type=int, default=offset_window,
+                        help='Offset window size for locating to apply hunks')
+    parser.add_argument('--ctx', type=int, default=edits_script_ctx,
+                        help='Edit script context size for finding shortest edit script')
 
-f3_n = apply_patch(f1, f2, f3)
+    args = parser.parse_args()
 
-with open(patched_file, 'w') as f:
-    f.truncate(0)
-    f.write('\n'.join(f3_n))
+    f1 = open(args.base_file).read().splitlines()
+    f2 = open(args.patched_file).read().splitlines()
+    f3 = open(args.target_file).read().splitlines()
+    hunk_file = args.log_file
+    output_file = args.output
+    offset_window = args.window
+    edits_script_ctx = args.ctx
+
+    f3_n = apply_patch(f1, f2, f3)
+
+    with open(output_file, 'w') as f:
+        f.truncate(0)
+        f.write('\n'.join(f3_n))

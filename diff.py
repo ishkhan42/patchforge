@@ -202,16 +202,3 @@ def shortest_edit_script(old_sequence, new_sequence, ctx_len=3):
             trace.append(hunk)
 
     return trace
-
-
-if __name__ == '__main__':
-    # f1 = open(sys.argv[1]).read()
-    # f2 = open(sys.argv[2]).read()
-
-    f1 = open(sys.argv[1]).read().splitlines()
-    f2 = open(sys.argv[2]).read().splitlines()
-
-    diffs = shortest_edit_script(f1, f2, 3)
-
-    for diff in diffs:
-        print(diff, end='')
