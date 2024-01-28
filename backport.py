@@ -1,6 +1,13 @@
 import sys
 from diff import shortest_edit_script, DL, IN, EQ, Hunk
 
+############ CONSTANTS ############
+
+hunk_file = 'hunks.diff'
+patched_file = 'result.c'
+
+############           ############
+
 
 def is_subsequence(a: list, b: list):
     '''
@@ -10,55 +17,64 @@ def is_subsequence(a: list, b: list):
     '''
     if len(a) > len(b):
         return -1
-    # print('Checking subsequence:', file=sys.stderr)
     for i in range(len(b) - len(a) + 1):
-        # print(b[i:i + len(a)] == a, '\n', b[i:i + len(a)], '\n', a, file=sys.stderr)
         target = b[i:i + len(a)]
-        if target == a:
+
+        if a == target:
             return i
-        # yes = True
-        # for j in range(len(a)):
-        #     if a[j] != target[j]:
-        #         yes = False
-        #         print('Not a subsequence:', a[j], file=sys.stderr)
-        #         break
 
-        # if yes:
-        #     return i
-    return -1
+    return None
 
 
-def apply_hunk(old_sequence: list, hunk: Hunk, delta: int):
+def construct_splited_sequence(diffs: list, patched: bool):
+    prefix = []
+    middle = []
+    postfix = []
+
+    it = iter(diffs)
+    d = next(it, None)
+
+    while d is not None and d[0] == EQ:
+        prefix += d[1]
+        d = next(it, None)
+
+    last_eq_pos = -1
+    while d is not None:
+        if not patched and d[0] == IN:
+            d = next(it, None)
+            continue
+        if patched and d[0] == DL:
+            d = next(it, None)
+            continue
+        middle += d[1]
+        od = d[0]
+        d = next(it, None)
+        if d is not None and d[0] == EQ and od != EQ:
+            last_eq_pos = len(middle)
+
+    if last_eq_pos != -1:
+        postfix = middle[last_eq_pos:]
+        middle = middle[:last_eq_pos]
+
+    return prefix, middle, postfix
+
+
+def apply_hunk(old_sequence: list, hunk: Hunk, delta: int, offset_window=20):
     '''
     Apply a hunk to a sequence.
-    If conflict is found, log and return old sequence.
-    Return the new sequence.
+    If conflict is found, log and return old sequence, None.
+    Return the new sequence, offset.
     '''
-    st1 = hunk.start1 + delta
-    st2 = hunk.start2 + delta
+    npos = hunk.start2 + delta
 
     # Construct unmodified sequence from hunk
-    unpatched_sequence = []
-    for ed in hunk.diffs:
-        op = ed[0]
-        data = ed[1]
-        if op == EQ:
-            unpatched_sequence += data
-        if op == DL:
-            unpatched_sequence += data
-        if op == IN:
-            pass
-
-    # Debug print upatched sequence
-    # print('Unpatched sequence:', file=sys.stderr)
-    # for ln in unpatched_sequence:
-    #     print(ln, file=sys.stderr)
-
+    unpre, unmid, unpos = construct_splited_sequence(hunk.diffs, False)
+    unpatched_sequence = unpre + unmid + unpos
     is_sub = is_subsequence(
-        unpatched_sequence, old_sequence[st2:st2 + hunk.length1])
-    # print('is_sub:', is_sub, file=sys.stderr)
+        unpatched_sequence, old_sequence[npos:npos + hunk.length1])
 
-    if is_sub == -1:
+    # Check if modified sequence is a subsequence of old sequence
+    if is_sub is None:
         # Construct modified sequence from hunk
         patched_sequence = []
         for ed in hunk.diffs:
@@ -70,63 +86,80 @@ def apply_hunk(old_sequence: list, hunk: Hunk, delta: int):
                 pass
             if op == IN:
                 patched_sequence += data
-        if is_subsequence(patched_sequence, old_sequence[hunk.start2:hunk.start2 + hunk.length2]) != -1:
+        if is_subsequence(patched_sequence, old_sequence[hunk.start2:hunk.start2 + hunk.length2]) is not None:
             # Modified sequence is a subsequence of old sequence,
-            # Probably same patch applied is already applied ?
-            return old_sequence, True
+            # Probably same patch is already applied ?
+            return old_sequence, 0
 
-    if is_sub == -1:
-        # No subsequence found, probably conflict
-        print('Conflict found at line', st2 + 1, file=sys.stderr)
-        return old_sequence, False
+    # Try finding in larger context and,
+    windows_seq = old_sequence[max(0, npos-offset_window):
+                               min(len(old_sequence), npos + hunk.length1 + offset_window)]
 
-    st1 += is_sub
-    st2 += is_sub
+    if is_sub is None:
+        # Try to find if there was something fully removed
+        is_sub = is_subsequence(unmid, windows_seq)
+
+        if is_sub is not None:
+            is_sub -= (offset_window + len(unpre))
+
+    if is_sub is None:
+        # Try to find if there was something fully added
+        is_sub = is_subsequence(unpre + unpos, windows_seq)
+
+        if is_sub is not None:
+            is_sub -= (offset_window + len(unpre))
+
+    if is_sub is None:
+        return old_sequence, None
+
+    npos += is_sub
 
     for ed in hunk.diffs:
         op = ed[0]
         data = ed[1]
         if op == EQ:
-            st1 += len(data)
-            st2 += len(data)
-        if op == IN:
+            npos += len(data)
+        elif op == IN:
             for ln in data:
-                old_sequence.insert(st2, ln)
-                st1 += 1
-                st2 += 1
-        if op == DL:
+                old_sequence.insert(npos, ln)
+                npos += 1
+        elif op == DL:
             for ln in data:
-                old_sequence.pop(st2)
+                old_sequence.pop(npos)
 
-    return old_sequence, True
+    return old_sequence, is_sub
 
 
-def apply_patch(old_sequence: list, hunks: list[Hunk]):
+def apply_patch(base_sequence: list, patched_sequence, target_sequence):
+
+    hunks = shortest_edit_script(base_sequence, patched_sequence)
+
+    # Log hunks to file
+    with open(hunk_file, 'w') as f:
+        f.truncate(0)
+        for i, hunk in enumerate(hunks):
+            print(f'%% Hunk #{i+1}', file=f)
+            print(hunk, file=f)
+
     delta = 0
-    for hunk in hunks:
-        old_sequence, res = apply_hunk(old_sequence, hunk, delta)
-        if not res:
-            delta += hunk.length2
+    for i, hunk in enumerate(hunks):
+        target_sequence, offset = apply_hunk(target_sequence, hunk, delta)
+        if offset is None:
+            print(f'Hunk #{i+1} Failed', file=sys.stderr)
+            delta += hunk.length1 - hunk.length2
+        elif offset != 0:
+            delta += offset
+            print(f'Hunk #{i+1} Succeeded with offset {delta}', file=sys.stderr)
 
-    return old_sequence
+    return target_sequence
 
 
 f1 = open(sys.argv[1]).read().splitlines()
 f2 = open(sys.argv[2]).read().splitlines()
 f3 = open(sys.argv[3]).read().splitlines()
 
+f3_n = apply_patch(f1, f2, f3)
 
-# f1 = open(sys.argv[1]).read()
-# f2 = open(sys.argv[2]).read()
-# f3 = open(sys.argv[3]).read()
-
-
-hunks = shortest_edit_script(f1, f2)
-
-# for diff in diffs:
-#     print(diff[0], diff[1] + 1, diff[2])
-
-f3_n = apply_patch(f3, hunks)
-
-print('\n'.join(f3_n))
-# print(f1)
+with open(patched_file, 'w') as f:
+    f.truncate(0)
+    f.write('\n'.join(f3_n))

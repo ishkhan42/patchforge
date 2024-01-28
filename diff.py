@@ -1,6 +1,5 @@
 import math
 import sys
-import urllib.parse
 
 '''
 Referances:
@@ -40,7 +39,6 @@ class Hunk:
             coords2 = str(self.start2 + 1) + "," + str(self.length2)
         text = ["@@ -", coords1, " +", coords2, " @@\n"]
 
-        # Escape the body of the patch with %xx notation.
         for (op, data) in self.diffs:
             o = ' '
             if op == IN:
@@ -55,9 +53,6 @@ class Hunk:
             else:
                 form = o + data
 
-            # High ascii will raise UnicodeDecodeError.  Use Unicode instead.
-            # data = data.encode("utf-8")
-            # text.append(urllib.parse.quote(data, "!~*'();/?:@&=+$,# ") + "\n")
             text.append(form)
         return "".join(text)
 
